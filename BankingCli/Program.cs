@@ -1,6 +1,19 @@
 using BankingCli;
 
 BankSession banking = new BankSession();
+using HttpClient http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+EnglishCommands? english = null;
+try
+{
+    if (OpenAiClient.FromEnvironment(http) is OpenAiClient api)
+    {
+        english = new EnglishCommands(api);
+    }
+}
+catch (ArgumentException error)
+{
+    Console.Error.WriteLine(error.Message);
+}
 
 while (true)
 {
@@ -16,7 +29,9 @@ while (true)
         break;
     }
 
-    CommandResult result = banking.Execute(input);
+    CommandResult result = english is null || EnglishCommands.IsDirectCommand(input)
+        ? banking.Execute(input)
+        : await english.ExecuteAsync(input, banking);
     if (result.Output.Length > 0)
     {
         Console.WriteLine(result.Output);
