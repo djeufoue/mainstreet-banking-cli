@@ -7,9 +7,9 @@ namespace BankingCli;
 
 internal sealed class OpenAiClient(HttpClient http, Uri endpoint, string model, string apiKey)
 {
-    public static OpenAiClient? FromEnvironment(HttpClient http)
+    // A missing key leaves the app in direct command mode.
+    public static OpenAiClient? CreateFromEnvironment(HttpClient http)
     {
-        // Read the key at runtime so it stays outside the repository.
         string? key = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (string.IsNullOrWhiteSpace(key))
         {
@@ -28,7 +28,7 @@ internal sealed class OpenAiClient(HttpClient http, Uri endpoint, string model, 
         return new OpenAiClient(http, uri, model, key.Trim());
     }
 
-    public async Task<string> CompleteAsync(string instructions, string input)
+    public async Task<string> RequestChatCompletionAsync(string instructions, string input)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -48,6 +48,7 @@ internal sealed class OpenAiClient(HttpClient http, Uri endpoint, string model, 
         Completion? completion = await response.Content.ReadFromJsonAsync<Completion>();
         Choice? choice = completion?.Choices?.FirstOrDefault();
         string? content = choice?.Message?.Content;
+        // A truncated reply might contain only part of a command or explanation.
         if (choice?.FinishReason != "stop" || string.IsNullOrWhiteSpace(content))
         {
             throw new JsonException("The API did not return a complete text reply.");

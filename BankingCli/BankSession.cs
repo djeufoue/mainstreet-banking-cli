@@ -127,6 +127,7 @@ internal sealed class BankSession
     private static bool TryParseAmount(string input, out decimal amount)
     {
         amount = 0m;
+        // If a decimal point is present, require one or two digits after it.
         int decimalPoint = input.IndexOf('.');
         if (decimalPoint >= 0 && input.Length - decimalPoint - 1 is < 1 or > 2)
         {

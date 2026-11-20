@@ -5,7 +5,7 @@ namespace BankingCli;
 
 internal sealed class EnglishCommands(OpenAiClient api)
 {
-    private const string Instructions = """
+    private const string CommandInterpretationInstructions = """
         Convert an everyday English banking request to exactly one of these commands:
         deposit <account> <amount>
         withdraw <account> <amount>
@@ -39,6 +39,7 @@ internal sealed class EnglishCommands(OpenAiClient api)
         Return only the reply, with no markdown.
         """;
 
+    // Use the input's shape to choose a route. The simulator still validates direct commands.
     public static bool IsDirectCommand(string input)
     {
         string[] words = input.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
@@ -47,29 +48,31 @@ internal sealed class EnglishCommands(OpenAiClient api)
             return true;
         }
 
-        // Keep the original command syntax, including common invalid command arguments.
         string command = words[0].ToLowerInvariant();
-        bool accountFirst = words.Length > 1
+        bool startsWithAccountArgument = words.Length > 1
             && words[1].ToLowerInvariant() is "chequing" or "savings";
-        bool amountLast = char.IsDigit(words[^1][0]);
-        bool hasProseMarkers = words.Skip(1).Any(word =>
+        bool lastWordStartsWithDigit = char.IsDigit(words[^1][0]);
+        bool hasCommonRequestWords = words.Skip(1).Any(word =>
             word.ToLowerInvariant() is "to" or "from" or "into" or "in" or "dollars");
         return command switch
         {
             "help" or "?" or "exit" => true,
             "balance" => words.Length <= 2,
-            "deposit" or "withdraw" => !hasProseMarkers && (accountFirst || words.Length == 3 && amountLast),
-            "transfer" => !hasProseMarkers && (accountFirst || words.Length == 4 && amountLast),
+            "deposit" or "withdraw" => !hasCommonRequestWords
+                && (startsWithAccountArgument || words.Length == 3 && lastWordStartsWithDigit),
+            "transfer" => !hasCommonRequestWords
+                && (startsWithAccountArgument || words.Length == 4 && lastWordStartsWithDigit),
             _ => false
         };
     }
 
-    public async Task<CommandResult> ExecuteAsync(string input, BankSession banking)
+    // Clarification returns before any banking operation can run.
+    public async Task<CommandResult> HandleEnglishRequestAsync(string input, BankSession banking)
     {
         string command;
         try
         {
-            string reply = await api.CompleteAsync(Instructions, input);
+            string reply = await api.RequestChatCompletionAsync(CommandInterpretationInstructions, input);
             if (reply.StartsWith("CLARIFY: ", StringComparison.Ordinal))
             {
                 return new CommandResult(reply["CLARIFY: ".Length..]);
@@ -103,18 +106,20 @@ internal sealed class EnglishCommands(OpenAiClient api)
 
         // Execute once. If rewriting fails, reuse the result of that execution.
         CommandResult result = banking.Execute(command);
-        return await ExplainAsync(command, result);
+        return await ExplainSimulatorResultAsync(command, result);
     }
 
-    private async Task<CommandResult> ExplainAsync(string command, CommandResult result)
+    // The simulator has already run. Its original output is the fallback.
+    private async Task<CommandResult> ExplainSimulatorResultAsync(string command, CommandResult result)
     {
         try
         {
-            string reply = await api.CompleteAsync(ReplyInstructions,
+            string reply = await api.RequestChatCompletionAsync(ReplyInstructions,
                 $"Command: {command}\nSimulator result: {result.Output}");
 
-            if (SameFacts(Money, result.Output, reply, RequestedAmount(command), NormalizeMoney)
-                && SameFacts(AccountNames, result.Output, reply, allowedExtraFacts: command))
+            if (ReplyPreservesExpectedValues(
+                    Money, result.Output, reply, GetRequestedAmount(command), NormalizeMoney)
+                && ReplyPreservesExpectedValues(AccountNames, result.Output, reply, allowedExtraValues: command))
             {
                 return result with { Output = reply };
             }
@@ -127,22 +132,24 @@ internal sealed class EnglishCommands(OpenAiClient api)
         return result;
     }
 
-    private static string RequestedAmount(string command) =>
+    // A declined transaction may omit the requested amount from the simulator output.
+    private static string GetRequestedAmount(string command) =>
         command.StartsWith("balance", StringComparison.Ordinal) ? "" : "$" + command.Split(' ')[^1];
 
     // Equivalent dollar values can be written with or without trailing zeros.
     private static string NormalizeMoney(string amount) =>
         amount.Contains('.') ? amount.TrimEnd('0').TrimEnd('.') : amount;
 
-    private static bool SameFacts(Regex pattern, string original, string reply,
-        string allowedExtraFacts = "", Func<string, string>? normalize = null)
+    // Require every expected value and reject unexpected ones. Values are checked independently.
+    private static bool ReplyPreservesExpectedValues(Regex pattern, string original, string reply,
+        string allowedExtraValues = "", Func<string, string>? normalize = null)
     {
-        IEnumerable<string> Facts(string text) =>
+        IEnumerable<string> ExtractValues(string text) =>
             pattern.Matches(text).Select(match => normalize?.Invoke(match.Value) ?? match.Value);
 
-        var expected = Facts(original).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var actual = Facts(reply).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var expected = ExtractValues(original).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var actual = ExtractValues(reply).ToHashSet(StringComparer.OrdinalIgnoreCase);
         return expected.IsSubsetOf(actual)
-            && actual.IsSubsetOf(expected.Concat(Facts(allowedExtraFacts)));
+            && actual.IsSubsetOf(expected.Concat(ExtractValues(allowedExtraValues)));
     }
 }

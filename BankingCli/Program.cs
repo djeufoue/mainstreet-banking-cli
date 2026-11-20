@@ -1,13 +1,13 @@
 using BankingCli;
 
 BankSession banking = new BankSession();
-using HttpClient http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-EnglishCommands? english = null;
+using HttpClient httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+EnglishCommands? englishCommands = null;
 try
 {
-    if (OpenAiClient.FromEnvironment(http) is OpenAiClient api)
+    if (OpenAiClient.CreateFromEnvironment(httpClient) is OpenAiClient apiClient)
     {
-        english = new EnglishCommands(api);
+        englishCommands = new EnglishCommands(apiClient);
     }
 }
 catch (ArgumentException error)
@@ -29,9 +29,9 @@ while (true)
         break;
     }
 
-    CommandResult result = english is null || EnglishCommands.IsDirectCommand(input)
+    CommandResult result = englishCommands is null || EnglishCommands.IsDirectCommand(input)
         ? banking.Execute(input)
-        : await english.ExecuteAsync(input, banking);
+        : await englishCommands.HandleEnglishRequestAsync(input, banking);
     if (result.Output.Length > 0)
     {
         Console.WriteLine(result.Output);
